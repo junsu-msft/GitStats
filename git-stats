@@ -420,33 +420,61 @@ class GitDataCollector(DataCollector):
 			if len(line) == 0:
 				continue
 
-			# <stamp> <author>
-			if line.find('files changed,') == -1:
-				pos = line.find(' ')
-				if pos != -1:
-					try:
-						(stamp, author) = (int(line[:pos]), line[pos+1:])
-						self.changes_by_date[stamp] = { 'files': files, 'ins': inserted, 'del': deleted, 'lines': total_lines }
-						if author not in self.authors:
-							self.authors[author] = { 'lines_added' : 0, 'lines_removed' : 0 }
-						self.authors[author]['lines_added'] = self.authors[author].get('lines_added', 0) + inserted
-						self.authors[author]['lines_removed'] = self.authors[author].get('lines_removed', 0) + deleted
-					except ValueError:
-						print('Warning: unexpected line "%s"' % line)
-				else:
-					print('Warning: unexpected line "%s"' % line)
-			else:
+			# Strip leading/trailing whitespace for proper parsing
+			line = line.strip()
+			if len(line) == 0:
+				continue
+
+			# Check if this is a shortstat line (contains 'files changed,')
+			if 'files changed,' in line:
 				numbers = re.findall(r'\d+', line)
-				if len(numbers) == 3:
-					(files, inserted, deleted) = list(map(lambda el : int(el), numbers))
+				files = inserted = deleted = 0
+				if len(numbers) >= 1:
+					files = int(numbers[0])
+					# Parse insertions and deletions based on the actual content
+					if 'insertion' in line:
+						# Find insertions
+						insertion_match = re.search(r'(\d+) insertion', line)
+						if insertion_match:
+							inserted = int(insertion_match.group(1))
+					if 'deletion' in line:
+						# Find deletions
+						deletion_match = re.search(r'(\d+) deletion', line)
+						if deletion_match:
+							deleted = int(deletion_match.group(1))
+					
 					total_lines += inserted
 					total_lines -= deleted
 					self.total_lines_added += inserted
 					self.total_lines_removed += deleted
 				else:
 					print('Warning: failed to handle line "%s"' % line)
-					(files, inserted, deleted) = (0, 0, 0)
-				#self.changes_by_date[stamp] = { 'files': files, 'ins': inserted, 'del': deleted }
+			else:
+				# This should be a <stamp> <author> line
+				# Check if it looks like a timestamp by checking if the first part is a number
+				pos = line.find(' ')
+				if pos != -1:
+					timestamp_part = line[:pos]
+					if timestamp_part.isdigit():
+						try:
+							(stamp, author) = (int(timestamp_part), line[pos+1:])
+							self.changes_by_date[stamp] = { 'files': files, 'ins': inserted, 'del': deleted, 'lines': total_lines }
+							# Only update existing authors - don't create new ones
+							if author in self.authors:
+								if 'lines_added' not in self.authors[author]:
+									self.authors[author]['lines_added'] = 0
+								if 'lines_removed' not in self.authors[author]:
+									self.authors[author]['lines_removed'] = 0
+								self.authors[author]['lines_added'] += inserted
+								self.authors[author]['lines_removed'] += deleted
+							# Reset the counters after processing
+							files = inserted = deleted = 0
+						except ValueError:
+							print('Warning: unexpected line "%s"' % line)
+					else:
+						print('Warning: unexpected line "%s"' % line)
+				else:
+					print('Warning: unexpected line "%s"' % line)
 		self.total_lines = total_lines
 	
 	def refine(self):
